@@ -80,6 +80,17 @@ def take_screenshot(page, path, description=None):
     else:
         print(f"Screenshot taken: {path}")
 
+def click_word(page, word, pause=200):
+    """Click each letter in the word using the on-screen keyboard, then press Enter."""
+    for letter in word.lower():
+        selector = f'button[data-key="{letter}"]'
+        if not wait_and_click(page, selector, description=f"Key '{letter}'"):
+            print(f"Failed to click letter: {letter}")
+        page.wait_for_timeout(pause)
+
+    # Press Enter (↵)
+    wait_and_click(page, 'button[data-key="↵"]', description="Enter key", timeout=100)
+
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -102,6 +113,10 @@ def run():
         time.sleep(2)
         print("Board loaded.")
         take_screenshot(page, "wordle_board3.png", description="Game board loaded")
+
+        click_word(page, "crane")
+        page.wait_for_timeout(2500)  # Let tiles animate
+        take_screenshot(page, "wordle_after_guess.png", description="After first guess")
 
         input("Press Enter to exit...")
         browser.close()
