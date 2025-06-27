@@ -4,6 +4,7 @@ import time
 
 
 def highlight_and_click(page, selector, highlight_duration=1000, wait_before_click=1000):
+    """Highlight an element and click it."""
     element_handle = page.query_selector(selector)
     if element_handle is None:
         print(f"No element found for selector: {selector}")
@@ -12,9 +13,7 @@ def highlight_and_click(page, selector, highlight_duration=1000, wait_before_cli
     # Highlight element
     page.evaluate('''
     ([el, duration]) => {
-        // Get element's position and size
         const rect = el.getBoundingClientRect();
-        // Create overlay
         const overlay = document.createElement('div');
         overlay.style.position = 'fixed';
         overlay.style.left = rect.left + 'px';
@@ -24,7 +23,7 @@ def highlight_and_click(page, selector, highlight_duration=1000, wait_before_cli
         overlay.style.border = '3px solid red';
         overlay.style.zIndex = 9999;
         overlay.style.pointerEvents = 'none';
-        overlay.style.borderRadius = '0'; // force square corners
+        overlay.style.borderRadius = '0';
         document.body.appendChild(overlay);
         setTimeout(() => {
             overlay.remove();
@@ -32,56 +31,77 @@ def highlight_and_click(page, selector, highlight_duration=1000, wait_before_cli
     }
     ''', [element_handle, highlight_duration])
 
-    # Wait so highlight is visible
     page.wait_for_timeout(wait_before_click)
-
-    # Click element
     element_handle.click()
     return True
+
+def wait_for_selector_safe(page, selector, timeout=5000, description=None):
+    """Wait for a selector with error handling."""
+    try:
+        page.wait_for_selector(selector, timeout=timeout)
+        if description:
+            print(f"{description} found.")
+        return True
+    except Exception:
+        if description:
+            print(f"No {description} found, continuing...")
+        return False
+
+def wait_and_click(page, selector, description=None, highlight=True, timeout=5000):
+    """Wait for a selector and click it, optionally highlighting."""
+    if wait_for_selector_safe(page, selector, timeout=timeout, description=description):
+        if highlight:
+            highlight_and_click(page, selector)
+        else:
+            element = page.query_selector(selector)
+            if element:
+                element.click()
+        print(f"{description or selector} clicked.")
+        return True
+    return False
+
+def remove_ad_container(page):
+    """Remove the ad container if present."""
+    print("Checking for ad container...")
+    if wait_for_selector_safe(page, 'div[class*="adContainer"]', timeout=1000, description="Ad container"):
+        page.evaluate("""
+        const ad = document.querySelector('div[class*="adContainer"]');
+        if (ad) ad.remove();
+        """)
+        print("Ad container removed.")
+    else:
+        print("No ad container found, continuing...")
+
+def take_screenshot(page, path, description=None):
+    """Take a screenshot and print a message."""
+    page.screenshot(path=path, full_page=True)
+    if description:
+        print(f"Screenshot taken: {description} -> {path}")
+    else:
+        print(f"Screenshot taken: {path}")
 
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
         page.goto("https://www.nytimes.com/games/wordle/index.html", wait_until="domcontentloaded")
-        
-        # TODO: make this more robust in case landing page changes
-        print("Waiting for Play button...")
-        page.wait_for_selector('text=Play')
-         
-        highlight_and_click(page, 'text=Play', highlight_duration=3000, wait_before_click=3000)
-        print("Play button clicked")
-        time.sleep(2)        
-        page.screenshot(path="wordle_board2.png", full_page=True)
 
-        try:
-            print("Waiting for ad container...")
-            page.wait_for_selector('div[class*="adContainer"]', timeout=1000)
-            page.evaluate("""
-            const ad = document.querySelector('div[class*="adContainer"]');
-            if (ad) ad.remove();
-            """)
-            time.sleep(2)
-            print("Ad container removed")
-        except:
-            print("No ad container found, continuing...")
+        print("Waiting for Play button...")
+        wait_and_click(page, 'text=Play', description="Play button")
+        time.sleep(2)
+        take_screenshot(page, "wordle_board2.png", description="After Play button")
+
+        remove_ad_container(page)
 
         # Wait for popup and close it
-        try:
-            print("Waiting for Close button...")
-            page.wait_for_selector('button[aria-label="Close"]', timeout=5000)
-            highlight_and_click(page, 'button[aria-label="Close"]', highlight_duration=3000, wait_before_click=3000)
-        except:
-            print("No close button found, continuing...")
+        wait_and_click(page, 'button[aria-label="Close"]', description="Close button")
 
         # Wait for the board to load
         print("Waiting for board...")
-        page.wait_for_selector('div[class*="Tile-module_tile"]', timeout=10000)
-        time.sleep(2) 
-        print("Board loaded")
-        # Take screenshot of game board
-        page.screenshot(path="wordle_board3.png", full_page=True)
-        print("Screenshot taken.")
+        wait_for_selector_safe(page, 'div[class*="Tile-module_tile"]', timeout=10000, description="Game board")
+        time.sleep(2)
+        print("Board loaded.")
+        take_screenshot(page, "wordle_board3.png", description="Game board loaded")
 
         input("Press Enter to exit...")
         browser.close()
