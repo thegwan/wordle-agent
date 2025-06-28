@@ -1,7 +1,10 @@
 # main.py
+import random
 from playwright.sync_api import sync_playwright
 import time
 
+# Global variable to track available words
+available_words = ["crane", "slate", "xxxxx", "horse", "stump", "asdfg"]
 
 def highlight_and_click(page, selector, highlight_duration=1000, wait_before_click=1000):
     """Highlight an element and click it."""
@@ -51,7 +54,7 @@ def wait_and_click(page, selector, description=None, highlight=True, timeout=500
     """Wait for a selector and click it, optionally highlighting."""
     if wait_for_selector_safe(page, selector, timeout=timeout, description=description):
         if highlight:
-            highlight_and_click(page, selector)
+            highlight_and_click(page, selector, highlight_duration=100, wait_before_click=100)
         else:
             element = page.query_selector(selector)
             if element:
@@ -168,10 +171,17 @@ def is_game_over(page):
         except:
             return None
 
-def guess_word(page, context) -> str:
-    """Guess a word and return the result."""
-    # hook up to LLM here
-    return "stump"
+def guess_word(page, context, available_words) -> tuple[str, list]:
+    """Guess a word and return the result along with updated available words."""
+    if not available_words:
+        print("No more words available! Resetting word pool...")
+        available_words = ["humps","crane", "slate", "xxxxx", "horse", "stump", "asdfg"]
+    
+    # Sample without replacement
+    word = random.choice(available_words)
+    available_words.remove(word)
+    
+    return word, available_words
 
 def run():
     with sync_playwright() as p:
@@ -193,47 +203,71 @@ def run():
         wait_for_selector_safe(page, 'div[class*="Tile-module_tile"]', timeout=10000, description="Game board")
         print("Board loaded.")
         take_screenshot(page, "wordle_board3.png", description="Game board loaded")
-        context = "You are a helpful assistant that plays the wordle game. Here is the past history of the game: Guess the next word, return only the word itself, and nothing else. You should return a single 5-letter word."
-        word = guess_word(page, context)
-        print(f"Guessing word: {word}")
-        click_word(page, word)
-        page.wait_for_timeout(2500)  # Let tiles animate
-        take_screenshot(page, "wordle_after_guess.png", description="After first guess")
         
-        # Read the result of the guess
-        print("\nReading guess result...")
-        result = read_guess_result(page, row_index=0)
-        print(f"Guess result: {result}")
-
-        # Check if we need to clear and retry (tbd state)
-        if any(tile_result == 'tbd' for _, tile_result in result):
-            print("Word not in dictionary or not submitted properly. Clearing and retrying...")
-            clear_word(page)
-            # Try a different word
-            word = "slate"  # Fallback word
-            print(f"Retrying with word: {word}")
+        # Initialize word pool
+        available_words = ["humps", "crane", "slate", "xxxxx", "horse", "stump", "asdfg"]
+        
+        # Game loop - continue guessing until game ends
+        game_won = False
+        game_lost = False
+        guess_count = 0
+        max_guesses = 6
+        
+        while not game_won and not game_lost and guess_count < max_guesses:
+            guess_count += 1
+            print(f"\n--- Round {guess_count} ---")
+            
+            context = "You are a helpful assistant that plays the wordle game. Here is the past history of the game: Guess the next word, return only the word itself, and nothing else. You should return a single 5-letter word."
+            word, available_words = guess_word(page, context, available_words)
+            print(f"Guessing word: {word}")
             click_word(page, word)
             page.wait_for_timeout(2500)  # Let tiles animate
-            take_screenshot(page, "wordle_after_retry.png", description="After retry guess")
-            
-            # Read the result again
-            print("\nReading retry guess result...")
-            result = read_guess_result(page, row_index=0)
-            print(f"Retry guess result: {result}")
+            take_screenshot(page, f"wordle_round_{guess_count}.png", description=f"After round {guess_count} guess")
 
-        # Check game state
-        if is_game_won(result):
-            print("🎉 Congratulations! You've won the game!")
-            winning_word = ''.join([letter for letter, _ in result])
-            print(f"The word was: {winning_word.upper()}")
-            take_screenshot(page, "wordle_win.png", description="Game won!")
-        else:
-            game_status = is_game_over(page)
-            if game_status == 'lost':
-                print("😔 Game over! You've lost the game.")
-                take_screenshot(page, "wordle_loss.png", description="Game lost")
+            # Read the result of the guess
+            print("\nReading guess result...")
+            result = read_guess_result(page, row_index=guess_count-1)
+            print(f"Guess result: {result}")
+
+            # Check if we need to clear and retry (tbd state)
+            while any(tile_result == 'tbd' for _, tile_result in result):
+                print("Word not in dictionary or not submitted properly. Clearing and retrying...")
+                clear_word(page)
+                # Try a different word
+                word, available_words = guess_word(page, context, available_words)
+                print(f"Retrying with word: {word}")
+                click_word(page, word)
+                page.wait_for_timeout(2500)  # Let tiles animate
+                take_screenshot(page, f"wordle_round_{guess_count}_retry.png", description=f"After round {guess_count} retry")
+                
+                # Read the result again
+                print("\nReading retry guess result...")
+                result = read_guess_result(page, row_index=guess_count-1)
+                print(f"Retry guess result: {result}")
+
+            # Check game state
+            if is_game_won(result):
+                game_won = True
+                print("Congratulations! You've won the game!")
+                winning_word = ''.join([letter for letter, _ in result])
+                print(f"The word was: {winning_word.upper()}")
+                take_screenshot(page, "wordle_win.png", description="Game won!")
             else:
-                print("The game is still ongoing.")
+                game_status = is_game_over(page)
+                if game_status == 'lost':
+                    game_lost = True
+                    print("Game over! You've lost the game.")
+                    take_screenshot(page, "wordle_loss.png", description="Game lost")
+                else:
+                    print("The game is still ongoing.")
+
+        # Final game summary
+        if game_won:
+            print(f"Game won in {guess_count} guesses!")
+        elif game_lost:
+            print(f"Game lost after {guess_count} guesses.")
+        else:
+            print(f"Game ended after {guess_count} guesses (max reached).")
 
         input("Press Enter to exit...")
         browser.close()
