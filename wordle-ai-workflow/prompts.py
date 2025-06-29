@@ -27,7 +27,7 @@ Think step by step:
 4. Try to win in as few guesses as possible.
 
 Then end with:  
-`ANSWER: [your word]`
+ANSWER: [your word]
 """
 
 def build_game_context(guess_history, current_round, max_guesses):

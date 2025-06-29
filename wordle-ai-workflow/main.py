@@ -246,7 +246,7 @@ def call_llm_for_guess(context: str) -> Optional[str]:
         response = client.responses.create(
             model="gpt-4.1-mini",
             instructions=WORDLE_INSTRUCTIONS,
-            input=context
+            input=context,
         )
         
         content = response.output_text
@@ -327,6 +327,8 @@ def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: Li
     
     # Get a word from the LLM
     word = guess_word(guess_history, guess_count, max_guesses)
+    if 'u' in word:
+        word = 'budgy'
     logger.info(f"Guessing word: {word}")
     click_word(page, word)
     page.wait_for_timeout(2500)  # Let tiles animate
@@ -343,6 +345,8 @@ def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: Li
         # Guess a new word
         logger.info(f"Retrying round {guess_count}...")
         play_round(page, guess_count, max_guesses, guess_history)
+        # Update result with the new word's result
+        result = read_guess_result(page, row_index=guess_count-1)
 
     if not any(tile_result == 'u' for tile_result in result):
         guess_history.append((word, result))
