@@ -1,5 +1,5 @@
 # prompts.py
-# Contains all prompt templates and instructions for the Wordle agent
+# Contains all prompt templates and instructions for the Wordle agent (workflow)
 
 WORDLE_INSTRUCTIONS = """You are an expert Wordle player. You will be given a history of previous guesses and their results, as well as the current round and how many guesses you have left.
 

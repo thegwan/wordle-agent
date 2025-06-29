@@ -1,5 +1,7 @@
-# main.py
+# A Wordle AI that plays the game using DOM reading and LLM reasoning.
+
 import re
+import logging
 from playwright.sync_api import sync_playwright, Page
 from openai import OpenAI
 import os
@@ -7,8 +9,15 @@ from dotenv import load_dotenv
 from typing import List, Tuple, Optional
 from prompts import WORDLE_INSTRUCTIONS, build_game_context
 
-# Load environment variables from .env file
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s'
+)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 fallback_word = "slope"
 
@@ -27,7 +36,7 @@ def highlight_and_click(page: Page, selector: str, wait_before_click: int = 1000
     # Use locator to check if element exists
     locator = page.locator(selector)
     if locator.count() == 0:
-        print(f"No element found for selector: {selector}")
+        logger.info(f"No element found for selector: {selector}")
         return False
 
     # Highlight element with red border using evaluate on the locator
@@ -71,11 +80,11 @@ def wait_for_selector_safe(page: Page, selector: str, timeout: int = 5000, descr
     try:
         page.wait_for_selector(selector, timeout=timeout)
         if description:
-            print(f"{description} found.")
+            logger.debug(f"{description} found.")
         return True
     except Exception:
         if description:
-            print(f"No {description} found, continuing...")
+            logger.debug(f"No {description} found, continuing...")
         return False
 
 def wait_and_click(page: Page, selector: str, description: Optional[str] = None, highlight: bool = True, timeout: int = 5000) -> bool:
@@ -99,7 +108,7 @@ def wait_and_click(page: Page, selector: str, description: Optional[str] = None,
             locator = page.locator(selector)
             if locator.count() > 0:
                 locator.click()
-        print(f"{description or selector} clicked.")
+        logger.debug(f"{description or selector} clicked.")
         return True
     return False
 
@@ -110,15 +119,15 @@ def remove_ad_container(page: Page) -> None:
     Args:
         page: Playwright page object
     """
-    print("Checking for ad container...")
+    logger.debug("Checking for ad container...")
     if wait_for_selector_safe(page, 'div[class*="adContainer"]', timeout=1000, description="Ad container"):
         page.evaluate("""
         const ad = document.querySelector('div[class*="adContainer"]'); if (ad)
         ad.remove();
         """)
-        print("Ad container removed.")
+        logger.debug("Ad container removed.")
     else:
-        print("No ad container found, continuing...")
+        logger.debug("No ad container found, continuing...")
 
 
 def click_word(page: Page, word: str, pause: int = 200) -> None:
@@ -133,7 +142,7 @@ def click_word(page: Page, word: str, pause: int = 200) -> None:
     for letter in word.lower():
         selector = f'button[data-key="{letter}"]'
         if not wait_and_click(page, selector, description=f"Key '{letter}'"):
-            print(f"Failed to click letter: {letter}")
+            logger.error(f"Failed to click letter: {letter}")
         page.wait_for_timeout(pause)
 
     # Press Enter (↵)
@@ -147,11 +156,11 @@ def clear_word(page: Page, pause: int = 100) -> None:
         page: Playwright page object
         pause: Pause between backspace clicks in milliseconds
     """
-    print("Clearing word...")
+    logger.debug("Clearing word...")
     for i in range(5):
         wait_and_click(page, 'button[data-key="←"]', description=f"Backspace {i+1}", timeout=100)
         page.wait_for_timeout(pause)
-    print("Word cleared.")
+    logger.debug("Word cleared.")
 
 def read_guess_result(page: Page, row_index: int = 0) -> str:
     """
@@ -179,7 +188,7 @@ def read_guess_result(page: Page, row_index: int = 0) -> str:
     end_index = start_index + 5
     
     if len(tiles) < end_index:
-        print(f"Not enough tiles found. Expected at least {end_index}, got {len(tiles)}")
+        logger.error(f"Not enough tiles found. Expected at least {end_index}, got {len(tiles)}")
         return "uuuuu"
     
     row_tiles = tiles[start_index:end_index]
@@ -198,7 +207,7 @@ def read_guess_result(page: Page, row_index: int = 0) -> str:
         else:  # tbd, empty, or any other state
             result += 'u'
         
-        print(f"Tile {i+1}: {data_state} -> {result[-1]}")
+        logger.debug(f"Tile {i+1}: {data_state} -> {result[-1]}")
     
     return result
 
@@ -229,7 +238,7 @@ def call_llm_for_guess(context: str) -> Optional[str]:
         # Get API key from environment variable
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
-            print("Warning: OPENAI_API_KEY not found in environment variables.")
+            logger.warning("Warning: OPENAI_API_KEY not found in environment variables.")
             return None
         
         client = OpenAI(api_key=api_key)
@@ -242,13 +251,13 @@ def call_llm_for_guess(context: str) -> Optional[str]:
         
         content = response.output_text
         if not content:
-            print("LLM returned empty content.")
+            logger.warning("LLM returned empty content.")
             return None
         
         # Print the full response for debugging
-        print("\n=== LLM RESPONSE ===")
-        print(content)
-        print("===================\n")
+        logger.info("\n=== LLM RESPONSE ===")
+        logger.info(content)
+        logger.info("===================\n")
         
         # Extract the word from the structured format
         lines = content.strip().split('\n')
@@ -267,7 +276,7 @@ def call_llm_for_guess(context: str) -> Optional[str]:
         return None
         
     except Exception as e:
-        print(f"Error calling OpenAI API: {e}")
+        logger.error(f"Error calling OpenAI API: {e}")
         return None
 
 def guess_word(guess_history: Optional[List[Tuple[str, str]]] = None, current_round: int = 1, max_guesses: int = 6) -> str:
@@ -285,20 +294,20 @@ def guess_word(guess_history: Optional[List[Tuple[str, str]]] = None, current_ro
     # Build comprehensive context for LLM
     if guess_history is None:
         guess_history = []
-    print(f"Guess history: {guess_history}")
+    logger.debug(f"Guess history: {guess_history}")
     
     # Try to get word from LLM
     llm_word = call_llm_for_guess(build_game_context(guess_history, current_round, max_guesses))
     
     if llm_word and len(llm_word) == 5 and llm_word.isalpha():
-        print(f"LLM chose: {llm_word}")
+        logger.info(f"LLM chose: {llm_word}")
         return llm_word
     else:
         # Fallback if LLM word is invalid or None
         if llm_word:
-            print(f"LLM word '{llm_word}' is invalid, using fallback: {fallback_word}")
+            logger.info(f"LLM word '{llm_word}' is invalid, using fallback: {fallback_word}")
         else:
-            print(f"LLM returned None, using fallback: {fallback_word}")
+            logger.info(f"LLM returned None, using fallback: {fallback_word}")
         return fallback_word
 
 def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: List[Tuple[str, str]]) -> bool:
@@ -314,38 +323,37 @@ def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: Li
     Returns:
         bool: True if the game was won this round, False otherwise
     """
-    print(f"\n--- Round {guess_count} ---")
+    logger.info(f"\n--- Round {guess_count} ---")
     
     # Get a word from the LLM
     word = guess_word(guess_history, guess_count, max_guesses)
-    print(f"Guessing word: {word}")
+    logger.info(f"Guessing word: {word}")
     click_word(page, word)
     page.wait_for_timeout(2500)  # Let tiles animate
 
     # Read the result of the guess
-    print("\nReading guess result...")
+    logger.debug("Reading guess result...")
     result = read_guess_result(page, row_index=guess_count-1)
-    print(f"Guess result: {result}")
+    logger.info(f"Guess result: {result}")
 
-    # Check if we need to clear and retry (tbd state)
+    # Check if we need to clear and retry (unknown states)
     while any(tile_result == 'u' for tile_result in result):
-        print("Word not in dictionary or not submitted properly. Clearing the word...")
+        logger.info("Word not in dictionary or not submitted properly. Clearing the word...")
         clear_word(page)
         # Guess a new word
-        print(f"Retrying round {guess_count}...")
+        logger.info(f"Retrying round {guess_count}...")
         play_round(page, guess_count, max_guesses, guess_history)
 
-    # Add to guess history (only if not tbd)
     if not any(tile_result == 'u' for tile_result in result):
         guess_history.append((word, result))
 
     # Check if game is won
     game_won = is_game_won(result)
     if game_won:
-        print("Congratulations! You've won the game!")
-        print(f"The word was: {word.upper()}")
+        logger.info("Congratulations! You've won the game!")
+        logger.info(f"The word was: {word.upper()}")
     else:
-        print("The game is still ongoing.")
+        logger.debug("The game is still ongoing.")
     
     return game_won
 
@@ -363,7 +371,7 @@ def run() -> None:
         page = browser.new_page()
         page.goto("https://www.nytimes.com/games/wordle/index.html", wait_until="domcontentloaded")
 
-        print("Waiting for Play button...")
+        logger.debug("Waiting for Play button...")
         wait_and_click(page, 'text=Play', description="Play button")
 
         remove_ad_container(page)
@@ -372,9 +380,9 @@ def run() -> None:
         wait_and_click(page, 'button[aria-label="Close"]', description="Close button")
 
         # Wait for the board to load
-        print("Waiting for board...")
+        logger.debug("Waiting for board...")
         wait_for_selector_safe(page, 'div[class*="Tile-module_tile"]', timeout=10000, description="Game board")
-        print("Board loaded.")
+        logger.debug("Board loaded.")
         
         # Game loop - continue guessing until game ends
         game_won = False
@@ -388,9 +396,9 @@ def run() -> None:
 
         # Final game summary
         if game_won:
-            print(f"Game won in {guess_count} guesses!")
+            logger.info(f"Game won in {guess_count} guesses!")
         else:
-            print(f"Game lost after {guess_count} guesses.")
+            logger.info(f"Game lost after {guess_count} guesses.")
 
         input("Press Enter to exit...")
         browser.close()
