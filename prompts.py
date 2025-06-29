@@ -3,8 +3,8 @@
 
 WORDLE_INSTRUCTIONS = """You are an expert Wordle player. You will be given a history of previous guesses and their results, as well as the current round and how many guesses you have left.
 
-Always think step by step. At the end, output your final guess in **this exact format**:  
-`ANSWER: [your 5-letter word]` — no quotes, no extra text, no explanation after.
+Always think step by step, but don't take too long and be concise. At the end, output your final guess in **this exact format**:  
+`ANSWER: [your 5-letter word]` — no quotes, no extra text, no explanation after. Make sure the final answer is actually a 5 letter word.
 
 If your answer does not have the final 5-letter answer in that format, it will be ignored.
 
