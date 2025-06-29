@@ -1,9 +1,11 @@
 # main.py
+import re
 from playwright.sync_api import sync_playwright, Page
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
 from typing import List, Tuple, Optional
+from prompts import WORDLE_INSTRUCTIONS, build_game_context
 
 # Load environment variables from .env file
 load_dotenv()
@@ -213,56 +215,9 @@ def is_game_won(result: str) -> bool:
     """
     return result == 'ccccc'
 
-def build_game_context(guess_history: List[Tuple[str, str]], current_round: int, max_guesses: int) -> str:
-    """
-    Build a comprehensive context for the LLM based on game state.
-    
-    Args:
-        guess_history: List of (word, result) tuples from previous guesses
-        current_round: Current round number (1-based)
-        max_guesses: Maximum number of guesses allowed
-        
-    Returns:
-        str: Formatted context string for the LLM
-    """
-    context = f"""You are a Wordle expert. Think carefully about the previous guesses and results, and reason about what the next best guess is. Once you are confident about your guess, respond with the answer. You must respond with exactly one 5-letter word, nothing else. No explanations, no quotes, just the word.
-
-You are playing Wordle. You have {max_guesses - current_round + 1} guesses remaining.
-
-GUESS HISTORY FORMAT EXPLANATION:
-Each previous guess shows: "Round X: WORD -> RESULT"
-- WORD: The 5-letter word that was guessed
-- RESULT: 5 characters showing the feedback for each letter position:
-  * 'c' = correct (green tile) - letter is in the right position
-  * 'p' = present (yellow tile) - letter is in the word but wrong position  
-  * 'a' = absent (gray tile) - letter is not in the word
-  * 'u' = unknown/not evaluated (usually means invalid word)
-
-For example: "Round 1: CRANE -> cpaaa" means:
-- C is correct (green) in position 1
-- R is present (yellow) but in wrong position
-- A, N, E are absent (gray)
-
-Previous guesses and results:
-"""
-    
-    for i, (word, result) in enumerate(guess_history, 1):
-        context += f"Round {i}: {word.upper()} -> {result}\n"
-    
-    context += f"""
-Current round: {current_round}
-
-Based on the previous results, choose the best 5-letter word to guess next. If there is no information, choose a good first guess for Wordle.
-Return only the word itself, nothing else.
-"""
-
-    print(context)
-    
-    return context
-
 def call_llm_for_guess(context: str) -> Optional[str]:
     """
-    Call OpenAI API to get the next word guess.
+    Call OpenAI API to get the next word guess with reasoning.
     
     Args:
         context: The game context and history to send to the LLM
@@ -280,7 +235,8 @@ def call_llm_for_guess(context: str) -> Optional[str]:
         client = OpenAI(api_key=api_key)
         
         response = client.responses.create(
-            model="gpt-4.1-nano-2025-04-14",
+            model="gpt-4.1-mini",
+            instructions=WORDLE_INSTRUCTIONS,
             input=context
         )
         
@@ -288,8 +244,27 @@ def call_llm_for_guess(context: str) -> Optional[str]:
         if not content:
             print("LLM returned empty content.")
             return None
+        
+        # Print the full response for debugging
+        print("\n=== LLM RESPONSE ===")
+        print(content)
+        print("===================\n")
+        
+        # Extract the word from the structured format
+        lines = content.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('ANSWER:'):
+                word = line[7:].strip().lower()  # Remove "ANSWER: " prefix
+                if len(word) == 5 and word.isalpha():
+                    return word
+        
+        # Fallback: try to find any 5-letter word in the response
+        words = re.findall(r'\b[a-zA-Z]{5}\b', content)
+        if words:
+            return words[0].lower()
             
-        return content.strip().lower()
+        return None
         
     except Exception as e:
         print(f"Error calling OpenAI API: {e}")
