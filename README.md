@@ -9,10 +9,6 @@ This demo uses the OpenAI Responses API with gpt-4.1-mini. Feel free to swap it 
 
 ### Setup
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd wordle-agent
-
 # Create virtual environment
 python -m venv wordle-agent-env
 source wordle-agent-env/bin/activate
