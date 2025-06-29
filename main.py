@@ -6,42 +6,47 @@ from openai import OpenAI
 import os
 from typing import List, Tuple, Optional
 
-def highlight_and_click(page: Page, selector: str, highlight_duration: int = 1000, wait_before_click: int = 1000) -> bool:
+def highlight_and_click(page: Page, selector: str, wait_before_click: int = 1000) -> bool:
     """
     Highlight an element and click it with visual feedback.
     
     Args:
         page: Playwright page object
         selector: CSS selector for the element to click
-        highlight_duration: How long to show the highlight in milliseconds
-        wait_before_click: How long to wait before clicking in milliseconds
+        wait_before_click: How long to wait before clicking in milliseconds (also used for highlight duration)
     
     Returns:
         bool: True if element was found and clicked, False otherwise
     """
-    element_handle = page.query_selector(selector)
-    if element_handle is None:
+    # Use locator to check if element exists
+    locator = page.locator(selector)
+    if locator.count() == 0:
         print(f"No element found for selector: {selector}")
         return False
 
-    # Highlight element with red border
-    page.evaluate('''
-    ([el, duration]) => {
-        const rect = el.getBoundingClientRect(); const overlay =
-        document.createElement('div'); overlay.style.position = 'fixed';
-        overlay.style.left = rect.left + 'px'; overlay.style.top = rect.top +
-        'px'; overlay.style.width = rect.width + 'px'; overlay.style.height =
-        rect.height + 'px'; overlay.style.border = '3px solid red';
-        overlay.style.zIndex = 9999; overlay.style.pointerEvents = 'none';
-        overlay.style.borderRadius = '0'; document.body.appendChild(overlay);
+    # Highlight element with red border using evaluate on the locator
+    locator.evaluate('''
+    (el, duration) => {
+        const rect = el.getBoundingClientRect();
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed';
+        overlay.style.left = rect.left + 'px';
+        overlay.style.top = rect.top + 'px';
+        overlay.style.width = rect.width + 'px';
+        overlay.style.height = rect.height + 'px';
+        overlay.style.border = '3px solid red';
+        overlay.style.zIndex = 9999;
+        overlay.style.pointerEvents = 'none';
+        overlay.style.borderRadius = '0';
+        document.body.appendChild(overlay);
         setTimeout(() => {
             overlay.remove();
         }, duration);
     }
-    ''', [element_handle, highlight_duration])
+    ''', wait_before_click)
 
     page.wait_for_timeout(wait_before_click)
-    element_handle.click()
+    locator.click()
     return True
 
 def wait_for_selector_safe(page: Page, selector: str, timeout: int = 5000, description: Optional[str] = None) -> bool:
@@ -83,11 +88,11 @@ def wait_and_click(page: Page, selector: str, description: Optional[str] = None,
     """
     if wait_for_selector_safe(page, selector, timeout=timeout, description=description):
         if highlight:
-            highlight_and_click(page, selector, highlight_duration=100, wait_before_click=100)
+            highlight_and_click(page, selector, wait_before_click=100)
         else:
-            element = page.query_selector(selector)
-            if element:
-                element.click()
+            locator = page.locator(selector)
+            if locator.count() > 0:
+                locator.click()
         print(f"{description or selector} clicked.")
         return True
     return False
@@ -170,8 +175,8 @@ def read_guess_result(page: Page, row_index: int = 0) -> List[Tuple[str, str]]:
     # Wait for tiles to finish animating
     page.wait_for_timeout(1000)
     
-    # Get all tiles in the specified row
-    tiles = page.query_selector_all(f'div[class*="Tile-module_tile"]')
+    # Get all tiles in the specified row using locators
+    tiles = page.locator(f'div[class*="Tile-module_tile"]').all()
     
     # Wordle has 6 rows of 5 tiles each, so we need to get the correct row
     start_index = row_index * 5
@@ -185,18 +190,16 @@ def read_guess_result(page: Page, row_index: int = 0) -> List[Tuple[str, str]]:
     result = []
     
     for i, tile in enumerate(row_tiles):
-        # Get the letter from the tile
-        letter = tile.text_content().strip().lower()
+        # Get the letter from the tile using locator
+        text_content = tile.text_content()
+        if text_content is None:
+            letter = ''
+        else:
+            letter = text_content.strip().lower()
         
-        # Get the tile's class and data-state to determine the result
-        class_name = tile.get_attribute('class') or ''
+        # Get the tile's data-state to determine the result
         data_state = tile.get_attribute('data-state') or ''
-        print(f"Tile {i+1} class: {class_name}, data-state: {data_state}")  # DEBUG
-        
-        # Check for tbd state (word not in dictionary or not submitted properly)
-        if data_state == 'tbd':
-            letter_state = 'tbd'
-        elif data_state in ['correct', 'present', 'absent']:
+        if data_state in ['correct', 'present', 'absent', 'tbd']:
             letter_state = data_state
         else:
             letter_state = 'unknown'
