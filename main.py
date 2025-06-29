@@ -1,12 +1,14 @@
 # main.py
-import random
 from playwright.sync_api import sync_playwright, Page
-import time
 from openai import OpenAI
 import os
+from dotenv import load_dotenv
 from typing import List, Tuple, Optional
 
-fallback_word = "crane"
+# Load environment variables from .env file
+load_dotenv()
+
+fallback_word = "slope"
 
 def highlight_and_click(page: Page, selector: str, wait_before_click: int = 1000) -> bool:
     """
@@ -116,20 +118,6 @@ def remove_ad_container(page: Page) -> None:
     else:
         print("No ad container found, continuing...")
 
-def take_screenshot(page: Page, path: str, description: Optional[str] = None) -> None:
-    """
-    Take a screenshot and print a descriptive message.
-    
-    Args:
-        page: Playwright page object
-        path: File path to save the screenshot
-        description: Optional description for logging
-    """
-    page.screenshot(path=path, full_page=True)
-    if description:
-        print(f"Screenshot taken: {description} -> {path}")
-    else:
-        print(f"Screenshot taken: {path}")
 
 def click_word(page: Page, word: str, pause: int = 200) -> None:
     """
@@ -212,27 +200,6 @@ def read_guess_result(page: Page, row_index: int = 0) -> str:
     
     return result
 
-def format_guess_result(result: str) -> str:
-    """
-    Format the result in a readable way for the LLM.
-    
-    Args:
-        result: 5-character string representing the result
-        
-    Returns:
-        str: Formatted string like "C(green) R(yellow) A(gray) N(gray) E(gray)"
-    """
-    formatted = []
-    for letter in result:
-        if letter == 'c':
-            formatted.append('C(green)')
-        elif letter == 'p':
-            formatted.append('P(yellow)')
-        elif letter == 'a':
-            formatted.append('A(gray)')
-        else:  # 'u' for any unknown/not evaluated state
-            formatted.append('U(unknown)')
-    return ' '.join(formatted)
 
 def is_game_won(result: str) -> bool:
     """
@@ -262,17 +229,34 @@ def build_game_context(guess_history: List[Tuple[str, str]], current_round: int,
 
 You are playing Wordle. You have {max_guesses - current_round + 1} guesses remaining.
 
+GUESS HISTORY FORMAT EXPLANATION:
+Each previous guess shows: "Round X: WORD -> RESULT"
+- WORD: The 5-letter word that was guessed
+- RESULT: 5 characters showing the feedback for each letter position:
+  * 'c' = correct (green tile) - letter is in the right position
+  * 'p' = present (yellow tile) - letter is in the word but wrong position  
+  * 'a' = absent (gray tile) - letter is not in the word
+  * 'u' = unknown/not evaluated (usually means invalid word)
+
+For example: "Round 1: CRANE -> cpaaa" means:
+- C is correct (green) in position 1
+- R is present (yellow) but in wrong position
+- A, N, E are absent (gray)
+
 Previous guesses and results:
 """
     
     for i, (word, result) in enumerate(guess_history, 1):
-        context += f"Round {i}: {word.upper()} -> {format_guess_result(result)}\n"
+        context += f"Round {i}: {word.upper()} -> {result}\n"
     
     context += f"""
 Current round: {current_round}
 
-Based on the previous results, choose the best 5-letter word to guess next.
-Return only the word itself, nothing else."""
+Based on the previous results, choose the best 5-letter word to guess next. If there is no information, choose a good first guess for Wordle.
+Return only the word itself, nothing else.
+"""
+
+    print(context)
     
     return context
 
@@ -293,16 +277,13 @@ def call_llm_for_guess(context: str) -> Optional[str]:
             print("Warning: OPENAI_API_KEY not found in environment variables.")
             return None
         
-        # Initialize OpenAI client
         client = OpenAI(api_key=api_key)
         
-        # Call the API with responses format
         response = client.responses.create(
-            model="gpt-4",
+            model="gpt-4.1-nano-2025-04-14",
             input=context
         )
         
-        # Extract and clean the response
         content = response.output_text
         if not content:
             print("LLM returned empty content.")
@@ -365,7 +346,6 @@ def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: Li
     print(f"Guessing word: {word}")
     click_word(page, word)
     page.wait_for_timeout(2500)  # Let tiles animate
-    take_screenshot(page, f"wordle_round_{guess_count}_after_guess_{word}.png", description=f"After round {guess_count} guess: {word}")
 
     # Read the result of the guess
     print("\nReading guess result...")
@@ -389,7 +369,6 @@ def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: Li
     if game_won:
         print("Congratulations! You've won the game!")
         print(f"The word was: {word.upper()}")
-        take_screenshot(page, "wordle_game_won.png", description="Game won!")
     else:
         print("The game is still ongoing.")
     
@@ -397,14 +376,12 @@ def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: Li
 
 def run() -> None:
     """
-    Main function to run the Wordle agent.
+    Main function to run the Wordle agent (actually more of a workflow than a true agent).
     
-    This function:
     1. Sets up the browser and navigates to Wordle
     2. Initializes the game
     3. Plays rounds until the game is won or lost
-    4. Takes screenshots throughout the process
-    5. Provides a final summary
+    4. Provides a final summary
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -413,7 +390,6 @@ def run() -> None:
 
         print("Waiting for Play button...")
         wait_and_click(page, 'text=Play', description="Play button")
-        take_screenshot(page, "wordle_after_play_button.png", description="After Play button")
 
         remove_ad_container(page)
 
@@ -424,7 +400,6 @@ def run() -> None:
         print("Waiting for board...")
         wait_for_selector_safe(page, 'div[class*="Tile-module_tile"]', timeout=10000, description="Game board")
         print("Board loaded.")
-        take_screenshot(page, "wordle_game_board_loaded.png", description="Game board loaded")
         
         # Game loop - continue guessing until game ends
         game_won = False
@@ -441,7 +416,6 @@ def run() -> None:
             print(f"Game won in {guess_count} guesses!")
         else:
             print(f"Game lost after {guess_count} guesses.")
-            take_screenshot(page, "wordle_game_lost.png", description="Game lost")
 
         input("Press Enter to exit...")
         browser.close()
