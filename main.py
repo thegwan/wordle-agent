@@ -6,6 +6,8 @@ from openai import OpenAI
 import os
 from typing import List, Tuple, Optional
 
+fallback_word = "crane"
+
 def highlight_and_click(page: Page, selector: str, wait_before_click: int = 1000) -> bool:
     """
     Highlight an element and click it with visual feedback.
@@ -161,16 +163,20 @@ def clear_word(page: Page, pause: int = 100) -> None:
         page.wait_for_timeout(pause)
     print("Word cleared.")
 
-def read_guess_result(page: Page, row_index: int = 0) -> List[Tuple[str, str]]:
+def read_guess_result(page: Page, row_index: int = 0) -> str:
     """
     Read the result of a guess from the DOM.
     
     Args:
         page: Playwright page object
         row_index: Which row to read (0 for first guess, 1 for second, etc.)
-    
+        
     Returns:
-        List of tuples: (letter, result) where result is 'correct', 'present', 'absent', or 'tbd'
+        str: 5-character string representing the result:
+             'c' = correct (green)
+             'p' = present (yellow) 
+             'a' = absent (gray)
+             'u' = unknown/not yet evaluated (tbd, empty, etc.)
     """
     # Wait for tiles to finish animating
     page.wait_for_timeout(1000)
@@ -184,66 +190,63 @@ def read_guess_result(page: Page, row_index: int = 0) -> List[Tuple[str, str]]:
     
     if len(tiles) < end_index:
         print(f"Not enough tiles found. Expected at least {end_index}, got {len(tiles)}")
-        return []
+        return "uuuuu"
     
     row_tiles = tiles[start_index:end_index]
-    result = []
+    result = ""
     
     for i, tile in enumerate(row_tiles):
-        # Get the letter from the tile using locator
-        text_content = tile.text_content()
-        if text_content is None:
-            letter = ''
-        else:
-            letter = text_content.strip().lower()
-        
         # Get the tile's data-state to determine the result
         data_state = tile.get_attribute('data-state') or ''
-        if data_state in ['correct', 'present', 'absent', 'tbd']:
-            letter_state = data_state
-        else:
-            letter_state = 'unknown'
         
-        result.append((letter, letter_state))
-        print(f"Tile {i+1}: {letter} -> {letter_state}")
+        if data_state == 'correct':
+            result += 'c'
+        elif data_state == 'present':
+            result += 'p'
+        elif data_state == 'absent':
+            result += 'a'
+        else:  # tbd, empty, or any other state
+            result += 'u'
+        
+        print(f"Tile {i+1}: {data_state} -> {result[-1]}")
     
     return result
 
-def format_guess_result(result: List[Tuple[str, str]]) -> str:
+def format_guess_result(result: str) -> str:
     """
     Format the result in a readable way for the LLM.
     
     Args:
-        result: List of (letter, status) tuples from read_guess_result
-    
+        result: 5-character string representing the result
+        
     Returns:
         str: Formatted string like "C(green) R(yellow) A(gray) N(gray) E(gray)"
     """
     formatted = []
-    for letter, status in result:
-        if status == 'correct':
-            formatted.append(f"{letter.upper()}(green)")
-        elif status == 'present':
-            formatted.append(f"{letter.upper()}(yellow)")
-        elif status == 'absent':
-            formatted.append(f"{letter.upper()}(gray)")
-        else:
-            formatted.append(f"{letter.upper()}(unknown)")
+    for letter in result:
+        if letter == 'c':
+            formatted.append('C(green)')
+        elif letter == 'p':
+            formatted.append('P(yellow)')
+        elif letter == 'a':
+            formatted.append('A(gray)')
+        else:  # 'u' for any unknown/not evaluated state
+            formatted.append('U(unknown)')
     return ' '.join(formatted)
 
-def is_game_won(result: List[Tuple[str, str]]) -> bool:
+def is_game_won(result: str) -> bool:
     """
     Check if the game is won (all tiles are correct).
     
     Args:
-        result: List of (letter, status) tuples from read_guess_result
-    
+        result: 5-character string representing the result
+        
     Returns:
-        bool: True if all tiles are 'correct', False otherwise
+        bool: True if all tiles are 'c', False otherwise
     """
-    return all(tile_result == 'correct' for _, tile_result in result)
+    return result == 'ccccc'
 
-def build_game_context(guess_history: List[Tuple[str, List[Tuple[str, str]]]], current_round: int, max_guesses: int) -> str:
+def build_game_context(guess_history: List[Tuple[str, str]], current_round: int, max_guesses: int) -> str:
     """
     Build a comprehensive context for the LLM based on game state.
     
@@ -251,7 +254,7 @@ def build_game_context(guess_history: List[Tuple[str, List[Tuple[str, str]]]], c
         guess_history: List of (word, result) tuples from previous guesses
         current_round: Current round number (1-based)
         max_guesses: Maximum number of guesses allowed
-    
+        
     Returns:
         str: Formatted context string for the LLM
     """
@@ -273,23 +276,22 @@ Return only the word itself, nothing else."""
     
     return context
 
-
-def call_llm_for_guess(context: str) -> str:
+def call_llm_for_guess(context: str) -> Optional[str]:
     """
     Call OpenAI API to get the next word guess.
     
     Args:
         context: The game context and history to send to the LLM
-    
+        
     Returns:
-        str: A 5-letter word to guess, or "crane" as fallback
+        str: A word from the LLM, or None if the call failed
     """
     try:
         # Get API key from environment variable
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
-            print("Warning: OPENAI_API_KEY not found in environment variables. Using fallback word.")
-            return "crane"
+            print("Warning: OPENAI_API_KEY not found in environment variables.")
+            return None
         
         # Initialize OpenAI client
         client = OpenAI(api_key=api_key)
@@ -303,56 +305,47 @@ def call_llm_for_guess(context: str) -> str:
         # Extract and clean the response
         content = response.output_text
         if not content:
-            print("LLM returned empty content. Using fallback.")
-            return "crane"
+            print("LLM returned empty content.")
+            return None
             
-        word = content.strip().lower()
+        return content.strip().lower()
         
-        # Validate it's a 5-letter word
-        if len(word) == 5 and word.isalpha():
-            return word
-        else:
-            print(f"LLM returned invalid word: '{word}'. Using fallback.")
-            return "crane"
-            
     except Exception as e:
         print(f"Error calling OpenAI API: {e}")
-        print("Using fallback word: crane")
-        return "crane"
+        return None
 
-def guess_word(guess_history: Optional[List[Tuple[str, List[Tuple[str, str]]]]] = None, current_round: int = 1, max_guesses: int = 6) -> str:
+def guess_word(guess_history: Optional[List[Tuple[str, str]]] = None, current_round: int = 1, max_guesses: int = 6) -> str:
     """
-    Guess a word using LLM and return the result.
+    Get a word to guess, either from LLM or fallback.
     
     Args:
         guess_history: List of (word, result) tuples from previous guesses
         current_round: Current round number (1-based)
         max_guesses: Maximum number of guesses allowed
-    
+        
     Returns:
-        str: A 5-letter word to guess
+        str: A valid 5-letter word to guess
     """
     # Build comprehensive context for LLM
     if guess_history is None:
         guess_history = []
+    print(f"Guess history: {guess_history}")
     
-    llm_context = build_game_context(guess_history, current_round, max_guesses)
+    # Try to get word from LLM
+    llm_word = call_llm_for_guess(build_game_context(guess_history, current_round, max_guesses))
     
-    # Call LLM for word selection
-    llm_word = call_llm_for_guess(llm_context)
-    
-    # Validate LLM response is a 5-letter word
-    if len(llm_word) == 5 and llm_word.isalpha():
-        word = llm_word.lower()
-        print(f"LLM chose: {word}")
+    if llm_word and len(llm_word) == 5 and llm_word.isalpha():
+        print(f"LLM chose: {llm_word}")
+        return llm_word
     else:
-        # Fallback to "crane" if LLM word is invalid
-        print(f"LLM word '{llm_word}' is invalid, using fallback: crane")
-        word = "crane"
-    
-    return word
+        # Fallback if LLM word is invalid or None
+        if llm_word:
+            print(f"LLM word '{llm_word}' is invalid, using fallback: {fallback_word}")
+        else:
+            print(f"LLM returned None, using fallback: {fallback_word}")
+        return fallback_word
 
-def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: List[Tuple[str, List[Tuple[str, str]]]]) -> bool:
+def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: List[Tuple[str, str]]) -> bool:
     """
     Play a single round of Wordle and return whether the game was won.
     
@@ -361,13 +354,13 @@ def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: Li
         guess_count: Current guess number (1-based)
         max_guesses: Maximum number of guesses allowed
         guess_history: List of (word, result) tuples from previous guesses
-    
+        
     Returns:
         bool: True if the game was won this round, False otherwise
     """
     print(f"\n--- Round {guess_count} ---")
     
-    # Get word from LLM
+    # Get a word from the LLM
     word = guess_word(guess_history, guess_count, max_guesses)
     print(f"Guessing word: {word}")
     click_word(page, word)
@@ -380,31 +373,22 @@ def play_round(page: Page, guess_count: int, max_guesses: int, guess_history: Li
     print(f"Guess result: {result}")
 
     # Check if we need to clear and retry (tbd state)
-    while any(tile_result == 'tbd' for _, tile_result in result):
-        print("Word not in dictionary or not submitted properly. Clearing and retrying...")
+    while any(tile_result == 'u' for tile_result in result):
+        print("Word not in dictionary or not submitted properly. Clearing the word...")
         clear_word(page)
-        # Try a different word
-        word = guess_word(guess_history, guess_count, max_guesses)
-        print(f"Retrying with word: {word}")
-        click_word(page, word)
-        page.wait_for_timeout(2500)  # Let tiles animate
-        take_screenshot(page, f"wordle_round_{guess_count}_retry_after_guess_{word}.png", description=f"After round {guess_count} retry: {word}")
-        
-        # Read the result again
-        print("\nReading retry guess result...")
-        result = read_guess_result(page, row_index=guess_count-1)
-        print(f"Retry guess result: {result}")
+        # Guess a new word
+        print(f"Retrying round {guess_count}...")
+        play_round(page, guess_count, max_guesses, guess_history)
 
     # Add to guess history (only if not tbd)
-    if not any(tile_result == 'tbd' for _, tile_result in result):
+    if not any(tile_result == 'u' for tile_result in result):
         guess_history.append((word, result))
 
     # Check if game is won
     game_won = is_game_won(result)
     if game_won:
         print("Congratulations! You've won the game!")
-        winning_word = ''.join([letter for letter, _ in result])
-        print(f"The word was: {winning_word.upper()}")
+        print(f"The word was: {word.upper()}")
         take_screenshot(page, "wordle_game_won.png", description="Game won!")
     else:
         print("The game is still ongoing.")
@@ -446,7 +430,7 @@ def run() -> None:
         game_won = False
         guess_count = 0
         max_guesses = 6
-        guess_history: List[Tuple[str, List[Tuple[str, str]]]] = []  # Track all guesses and their results
+        guess_history: List[Tuple[str, str]] = []  # Track all guesses and their results
         
         while not game_won and guess_count < max_guesses:
             guess_count += 1
