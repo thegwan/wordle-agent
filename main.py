@@ -160,13 +160,14 @@ class Level1WordleAgent:
         }
         ]
 
-        
+
     
     
 
 class Level0WordleAgent:
     def __init__(self, page: Page):
         self.page = page
+        self.llm_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.game_state = GameState(
             guess_history=[],
             current_round=0,
@@ -247,8 +248,8 @@ ANSWER: [your word]
             if not api_key:
                 logger.warning("Warning: OPENAI_API_KEY not found in environment variables.")
                 return None
-            client = OpenAI(api_key=api_key)
-            response = client.responses.create(
+            
+            response = self.llm_client.responses.create(
                 model="gpt-4.1-mini",
                 instructions=self.get_llm_instructions(),
                 input=context,
