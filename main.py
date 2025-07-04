@@ -29,7 +29,7 @@ class GameState:
     guess_history: List[Tuple[str, str]]
     current_round: int
     max_guesses: int
-    game_won: bool
+    # game_won: bool
 
 # Tool definitions
 def click_word(page: Page, word: str) -> None:
@@ -49,6 +49,8 @@ def click_word(page: Page, word: str) -> None:
             logger.error(f"Failed to click letter: {letter}")
 
     wait_and_click(page, 'button[data-key="↵"]', description="Enter key")
+    # Wait for tiles to finish animating
+    page.wait_for_timeout(1000)
 
 
 def clear_word(page: Page) -> None:
@@ -115,21 +117,24 @@ def read_game_state(page: Page, row_index: int = 0) -> str:
 
     return result
 
-def update_game_state(game_state: GameState, guess: str, result: str) -> None:
+def update_game_state(page: Page, game_state: GameState, guess: str) -> str:
     """
-    Update the game state with the new guess and result.
+    Reads the result of the guess from the board, updates the game state, and returns the result string.
 
     Args:
-        game_state: The current game state
+        page: Playwright page object
+        game_state: The current game state object
         guess: The guess to update the game state with
-        result: The result of the guess
 
     Returns:
-        None
+        str: The 5-character result string (e.g., 'cpaaa')
     """
-    game_state.guess_history.append((guess, result))
-    game_state.current_round += 1
-    game_state.game_won = check_game_won(result)
+    result = read_game_state(page, game_state.current_round)
+    if 'u' not in result:
+        game_state.guess_history.append((guess, result))
+        # game_state.game_won = check_game_won(result)
+        game_state.current_round += 1
+    return result
 
 def check_game_won(result: str) -> bool:
     """
@@ -152,8 +157,9 @@ class Level1WordleAgent:
             guess_history=[],
             current_round=0,
             max_guesses=6,
-            game_won=False
+            # game_won=False
         )
+        self.action_history = [] # List of tuples (action, result)
 
         # Define available tools.
         self.tool_registry = [
@@ -175,13 +181,12 @@ class Level1WordleAgent:
                 "returns": "None"
             },
             {
-                "name": "read_game_state",
-                "description": "Read the result of the last guess.",
+                "name": "update_game_state",
+                "description": "Read the result of the last guess from the board, update the game state, and return the result string.",
                 "args": {
-                    "row_index": {
-                        "type": "integer",
-                        "description": "Which row to read (0 for first guess, 1 for second, etc.)",
-                        "default": 0
+                    "guess": {
+                        "type": "string",
+                        "description": "The guess to update the game state with"
                     }
                 },
                 "returns": """str: 5-character string representing the result:
@@ -190,21 +195,6 @@ class Level1WordleAgent:
              'a' = absent (gray)
              'u' = unknown/not yet evaluated (tbd, empty, etc.)
              """
-            },
-            {
-                "name": "update_game_state",
-                "description": "Update the game state with the new guess and result.",
-                "args": {
-                    "guess": {
-                        "type": "string",
-                        "description": "The guess to update the game state with"
-                    },
-                    "result": {
-                        "type": "string",
-                        "description": "5-character string representing the result of the guess (e.g. 'ccpaa')"
-                    }
-                },
-                "returns": "None"
             },
             {
                 "name": "check_game_won",
@@ -235,7 +225,7 @@ class Level1WordleAgent:
 
         Raises:
         """
-        logger.debug(f"Parsing action: {action}")
+        print(f"Parsing action: {action}")
         match = re.match(r"^(\w+)\((.*)\)$", action.strip())
         if not match:
             raise ValueError(f"Invalid action format: {action}")
@@ -266,7 +256,7 @@ class Level1WordleAgent:
             ValueError: If the tool name is unknown
             Exception: If there is an error executing the tool
         """
-        logger.debug(f"Executing tool: {tool_name} with args: {args}")
+        print(f"Executing tool: {tool_name} with args: {args}")
         try:
             if tool_name == 'click_word':
                 click_word(self.page, args['word'])
@@ -274,16 +264,14 @@ class Level1WordleAgent:
             elif tool_name == 'clear_word':
                 clear_word(self.page)
                 return "Word cleared!"
-            elif tool_name == 'read_game_state':
-                return read_game_state(self.page, args['row_index'])
             elif tool_name == 'update_game_state':
-                update_game_state(self.game_state, args['guess'], args['result'])
-                return "Game state updated!"
+                result = update_game_state(self.page, self.game_state, args['guess'])
+                return f"Game state updated! Result: {result}"
             elif tool_name == 'check_game_won':
                 if check_game_won(args['result']):
                     return "Game won!"
                 else:
-                    return "Game still in progress."
+                    return "Game not won yet."
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
         except Exception as e:
@@ -293,7 +281,7 @@ class Level1WordleAgent:
         """
         Get the system prompt for the LLM.
         """
-        return """You are an autonomous agent playing Wordle. You goal is to win today's Wordle game in as few guesses as possible.
+        return f"""You are an autonomous agent playing Wordle. You goal is to win today's Wordle game in as few guesses as possible.
         Stop playing if you have won the game and let the user exit the game.
 
         You have access to the following tools:
@@ -301,12 +289,12 @@ class Level1WordleAgent:
 
         You must decide which tool to use based on the current situation.
 
-        You will be given the current game state, which consists of the following:
-        - The history of previous guesses and their results
-        - The current round
-        - The maximum number of rounds
-        - The game won status
-        
+        After each guess, you MUST:
+        1. update the game state (using update_game_state)
+        2. check if the game is won (using check_game_won)
+        You must not make another guess until you have checked if the game is won.
+       
+        If the result is 'uuuuu', this means the guess was not a valid word. You must clear the word and try again.
 
         You must output your response in this exact format:
         REASONING: [Explain your thought process and what you want to achieve]
@@ -319,11 +307,11 @@ class Level1WordleAgent:
         REASONING: I just made a guess and need to see the results.
         ACTION: read_game_state(row_index=0)
 
+        REASONING: I have the result. I must update the game state.
+        ACTION: update_game_state(guess="SLOPE", result="ccpaa")
+
         REASONING: Based on the previous game history, I think the next guess should be SLOPE.
         ACTION: click_word(word="SLOPE")
-
-        REASONING: I just made a guess and need to update the game state.
-        ACTION: update_game_state(guess="SLOPE", result="ccpaa")
 
         REASONING: The previous guess was not a valid word. I need to clear the word and try again.
         ACTION: clear_word()
@@ -332,22 +320,29 @@ class Level1WordleAgent:
         ACTION: check_game_won(result="ccpaa")
         """
 
-    def get_llm_input(self) -> str:
+    def get_llm_input(self, prev_action=None, prev_result=None) -> str:
         """
         Build the LLM input prompt with guess history and current state.
+
+        Args:
+            prev_action: The previous action taken
+            prev_result: The previous result of the action
 
         Returns:
             str: Formatted context string for the LLM
         """
-        return f"""You are an autonomous agent playing Wordle. You goal is to win today's Wordle game in as few guesses as possible.
-        Stop playing if you have won the game and let the user exit the game.
-
-        You have access to the following tools:
-        {self.tool_registry}
-
-        Current game state:
-        {self.game_state}
+        input_prompt = """
+        You are an autonomous agent playing Wordle.
         """
+
+        if prev_action and prev_result:
+            input_prompt += f"\nPrevious action: {prev_action}\nResult: {prev_result}\n"
+            input_prompt += f"\nCurrent game state:\n{self.game_state}\n"
+            input_prompt += f"\nAction history:\n{self.action_history}\n"
+            input_prompt += "Pick the correct next action based on the action history.\n"
+
+
+        return input_prompt
     
     def call_llm(self, context: str) -> Optional[dict]:
         """
@@ -359,10 +354,11 @@ class Level1WordleAgent:
         Returns:
             dict: A dictionary containing the reasoning and action, or None if the call failed
         """
+        # logger.info(f"System prompt: {self.get_llm_instructions()}")
         try:
             response = self.llm_client.responses.create(
                 model="gpt-4.1-mini",
-                instructions=self.get_llm_input(),
+                instructions=self.get_llm_instructions(),
                 input=context,
             )
             content = response.output_text
@@ -392,10 +388,12 @@ class Level1WordleAgent:
         """
         Run the Level 1 Wordle agent. LLM makes word guesses and decisions about which tools to call.
         """
-        max_iterations = 30 # Prevent infinite loops for safety
+        max_iterations = 50 # Prevent infinite loops for safety
         iteration = 0
+        prev_action = None
+        prev_result = None
 
-        while not self.game_state.game_won and self.game_state.current_round < self.game_state.max_guesses:
+        while self.game_state.current_round < self.game_state.max_guesses:
             iteration += 1
             if iteration > max_iterations:
                 logger.warning("Max iterations reached. Exiting.")
@@ -403,18 +401,22 @@ class Level1WordleAgent:
 
             logger.info(f"\n--- Round {self.game_state.current_round+1} ---")
 
-            context = self.get_llm_input()
+            context = self.get_llm_input(prev_action=prev_action, prev_result=prev_result)
+            logger.info(f"Context: {context}")
             llm_response = self.call_llm(context)
             if not llm_response:
                 logger.error("Failed to get LLM response.")
                 break
 
-            print(f"LLM reasoning: {llm_response['reasoning']}")
-            print(f"LLM action: {llm_response['action']}")
+            # print(f"LLM reasoning: {llm_response['reasoning']}")
+            # print(f"LLM action: {llm_response['action']}")
 
             tool_name, args = self.parse_action(llm_response['action'])
             result = self.execute_tool(tool_name, args)
             print(f"Tool result: {result}")
+            self.action_history.append((llm_response['action'], result))
+            prev_action = llm_response['action']
+            prev_result = result
 
             if result == "Game won!":
                 logger.info("Congratulations! You've won the game!")
@@ -423,7 +425,7 @@ class Level1WordleAgent:
                 logger.error(f"Error executing tool: {result}")
                 break
 
-        if self.game_state.game_won:
+        if self.game_state.guess_history and self.game_state.guess_history[-1][1] == 'ccccc':
             logger.info(f"Game won in {self.game_state.current_round} guesses!")
         else:
             logger.info(f"Game lost after {self.game_state.current_round} guesses.")
@@ -437,7 +439,7 @@ class Level0WordleAgent:
             guess_history=[],
             current_round=0,
             max_guesses=6,
-            game_won=False
+            # game_won=False
         )
 
     def get_llm_instructions(self) -> str:
@@ -577,30 +579,28 @@ ANSWER: [your word]
         click_word(self.page, word)
         self.page.wait_for_timeout(2500)
         logger.debug("Reading guess result...")
-        result = read_game_state(self.page, row_index=self.game_state.current_round)
+        result = update_game_state(self.page, self.game_state, word)
         logger.info(f"Guess result: {result}")
         while any(tile_result == 'u' for tile_result in result):
             logger.info("Word not in dictionary or not submitted properly. Clearing the word...")
             clear_word(self.page)
             logger.info(f"Retrying round {self.game_state.current_round+1}...")
             self.play_round()
-            result = read_game_state(self.page, row_index=self.game_state.current_round)
-        if not any(tile_result == 'u' for tile_result in result):
-            update_game_state(self.game_state, word, result)
-        if self.game_state.game_won:
+            result = update_game_state(self.page, self.game_state, word)
+        if self.game_state.guess_history[-1][1] == 'ccccc':
             logger.info("Congratulations! You've won the game!")
             logger.info(f"The word was: {word.upper()}")
         else:
             logger.debug("The game is still ongoing.")
-        return self.game_state.game_won
+        return self.game_state.guess_history[-1][1] == 'ccccc'
 
     def run(self):
         """
         Run the Level 0 Wordle agent. LLM only makes guesses, system controls execution flow.
         """
-        while not self.game_state.game_won and self.game_state.current_round < self.game_state.max_guesses:
-            self.game_state.game_won = self.play_round()
-        if self.game_state.game_won:
+        while self.game_state.current_round < self.game_state.max_guesses:
+            self.play_round()
+        if self.game_state.guess_history and self.game_state.guess_history[-1][1] == 'ccccc':
             logger.info(f"Game won in {self.game_state.current_round} guesses!")
         else:
             logger.info(f"Game lost after {self.game_state.current_round} guesses.")
@@ -629,7 +629,7 @@ def run_level0_agent():
         page = browser.new_page()
         page.goto("https://www.nytimes.com/games/wordle/index.html", wait_until="domcontentloaded")
         setup_game(page)
-        agent = Level0WordleAgent(page)
+        agent = Level1WordleAgent(page)
         agent.run()
         input("Press Enter to exit...")
         browser.close()
