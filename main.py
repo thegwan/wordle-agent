@@ -28,7 +28,10 @@ def click_word(page: Page, word: str) -> None:
 
     Args:
         page: Playwright page object
-        word: The word to type (will be converted to lowercase)
+        word: The 5-letter word to type (will be converted to lowercase)
+    
+    Returns:
+        None
     """
     for letter in word.lower():
         selector = f'button[data-key="{letter}"]'
@@ -45,6 +48,9 @@ def clear_word(page: Page) -> None:
 
     Args:
         page: Playwright page object
+
+    Returns:
+        None
     """
     logger.debug("Clearing word...")
     for i in range(5):
@@ -106,12 +112,13 @@ def check_game_won(result: str) -> bool:
     Check if the game is won (all tiles are correct).
 
     Args:
-        result: 5-character string representing the result
+        result: 5-character string representing the game state
 
     Returns:
         bool: True if all tiles are 'c', False otherwise
     """
     return result == 'ccccc'
+
 
 
 @dataclass
@@ -124,6 +131,38 @@ class GameState:
     max_guesses: int
     game_won: bool
 
+class Level1WordleAgent:
+    def __init__(self, page: Page):
+        self.page = page
+        self.game_state = GameState(
+            guess_history=[],
+            current_round=0,
+            max_guesses=6,
+            game_won=False
+        )
+
+        # Define available tools
+        self.tool_registry = [{
+            "name": "click_word",
+            "description": click_word.__doc__
+        },
+        {
+            "name": "clear_word",
+            "description": clear_word.__doc__
+        },
+        {
+            "name": "read_game_state",
+            "description":  read_game_state.__doc__
+        },
+        {
+            "name": "check_game_won",
+            "description":  check_game_won.__doc__
+        }
+        ]
+
+        
+    
+    
 
 class Level0WordleAgent:
     def __init__(self, page: Page):
