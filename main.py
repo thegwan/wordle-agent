@@ -339,7 +339,7 @@ class Level1WordleAgent:
             input_prompt += f"\nPrevious action: {prev_action}\nResult: {prev_result}\n"
             input_prompt += f"\nCurrent game state:\n{self.game_state}\n"
             input_prompt += f"\nAction history:\n{self.action_history}\n"
-            input_prompt += "Pick the correct next action based on the action history.\n"
+            input_prompt += "Pick the correct next action based on the action history. YOU MUST CHECK IF THE GAME IS WON AFTER UPDATING THE GAME STATE.\n"
 
 
         return input_prompt
