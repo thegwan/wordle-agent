@@ -32,15 +32,29 @@ def clear_word(page: Page) -> None:
             page, 'button[data-key="←"]', description=f"Backspace {i+1}"
         )
 
-def update_game_state(
-    page: Page, game_state: GameState, guess: str
-) -> str:
-    # row index is 0-indexed, but current_round is 1-indexed
-    result = read_game_state(page, game_state.current_round - 1)
-    game_state.guess_history.append((guess, result))
-    if 'u' not in result:
-        game_state.current_round += 1
-    return result
+def read_game_board(page: Page) -> List[Tuple[str, str]]:
+    page.wait_for_timeout(1000)
+    tiles = page.locator('div[class*="Tile-module_tile"]').all()
+    board = []
+    for i in range(0, len(tiles), 5):
+        row_tiles = tiles[i:i+5]
+        word = ''
+        result = ''
+        for tile in row_tiles:
+            letter = (tile.text_content() or '').strip().lower()
+            data_state = tile.get_attribute('data-state') or ''
+            word += letter if letter else ''
+            if data_state == 'correct':
+                result += 'c'
+            elif data_state == 'present':
+                result += 'p'
+            elif data_state == 'absent':
+                result += 'a'
+            else:
+                result += 'u'
+        if len(word) == 5:
+            board.append((word, result))
+    return board
 
 def read_game_state(page: Page, row_index: int = 0) -> str:
     page.wait_for_timeout(1000)
@@ -67,8 +81,16 @@ def read_game_state(page: Page, row_index: int = 0) -> str:
             result += 'u'
     return result
 
-def check_game_won(result: str) -> bool:
-    return result == 'ccccc'
+def update_game_state(
+    page: Page, game_state: GameState, guess: str
+) -> str:
+    # row index is 0-indexed, but current_round is 1-indexed
+    result = read_game_state(page, game_state.current_round - 1)
+    if 'u' not in result:
+        game_state.guess_history.append((guess, result))
+        game_state.current_round += 1
+    return result
+
 
 class Level1WordleAgent:
     def __init__(self, page: Page):
@@ -76,6 +98,7 @@ class Level1WordleAgent:
         self.llm_client = OpenAI(
             api_key=os.getenv('OPENAI_API_KEY')
         )
+        self.action_history = []
         self.game_state = GameState(
             guess_history=[],
             current_round=1,
@@ -84,10 +107,7 @@ class Level1WordleAgent:
         self.tool_registry = [
             {
                 "name": "click_word",
-                "description": (
-                    "Make a guess by clicking the letters on the on-screen "
-                    "keyboard."
-                ),
+                "description": "Guess a word by clicking letters on the on-screen keyboard.",
                 "args": {
                     "word": {
                         "type": "str",
@@ -100,32 +120,16 @@ class Level1WordleAgent:
             },
             {
                 "name": "clear_word",
-                "description": (
-                    "Clear the current word."
-                ),
+                "description": "Clear the currently entered word if it was invalid or a mistake.",
                 "args": {},
                 "returns": "None",
             },
             {
-                "name": "update_game_state",
-                "description": (
-                    "Read the result of the last guessed word and update the game state."
-                ),
-                "args": {
-                    "guess": {
-                        "type": "str",
-                        "description": (
-                            "The guess to update the game state with"
-                        ),
-                    }
-                },
-                "returns": """A 5-character string representing the result: 
-     - 'c' = correct (green)
-     - 'p' = present (yellow)
-     - 'a' = absent (gray)
-     - 'u' = unknown/not yet evaluated (tbd, empty, etc.)
-                """,
-            },
+                "name": "read_game_board",
+                "description": "Read the current game board. This returns all guessed words and their result strings (e.g., 'cpaaa').",
+                "args": {},
+                "returns": "A list of tuples, each containing a 5-letter word and a 5-character string representing the result",
+            }
         ]
 
     def format_tool_registry(self, registry: List[dict]) -> str:
@@ -147,10 +151,16 @@ class Level1WordleAgent:
 
         return "\n".join(lines).rstrip()
 
+    def format_action_history(self, action_history: List[Tuple[str, str]]) -> str:
+        lines = []
+        for i, (action, result) in enumerate(action_history):
+            lines.append(f"Step {i+1}: {action} -> {result}")
+        return "\n".join(lines).rstrip()
+
     def format_guess_history(self, guess_history: List[Tuple[str, str]]) -> str:
         lines = []
-        for guess, result in guess_history:
-            lines.append(f"{guess} -> {result}")
+        for i, (guess, result) in enumerate(guess_history):
+            lines.append(f"Round {i+1}: {guess} -> {result}")
         return "\n".join(lines).rstrip()
 
     def parse_action(self, action_json: str) -> Tuple[str, dict]:
@@ -169,15 +179,13 @@ class Level1WordleAgent:
         try:
             if tool_name == 'click_word':
                 click_word(self.page, args['word'])
-                return "Word clicked!"
+                return f"Word clicked! Your most recent guess is {args['word']}"
             elif tool_name == 'clear_word':
                 clear_word(self.page)
-                return "Word cleared!"
-            elif tool_name == 'update_game_state':
-                result = update_game_state(
-                    self.page, self.game_state, args['guess']
-                )
-                return f"Game state updated! Result: {result}"
+                return f"You have just cleared your most recent guess."
+            elif tool_name == 'read_game_board':
+                result = read_game_board(self.page)
+                return f"Game board read! Result: {result}"
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
         except Exception as e:
@@ -186,30 +194,41 @@ class Level1WordleAgent:
     def get_llm_instructions(self) -> str:
         tool_registry_str = self.format_tool_registry(self.tool_registry)
         return f"""
-You are an autonomous agent playing Wordle. Your goal is to win today's Wordle in as few guesses as possible.
-Stop playing if you have won the game (result == 'ccccc') and let the user exit the game.
+You are an autonomous agent playing Wordle.
 
-You have access to the following tools:
+Your goal is to guess the hidden 5-letter word in as few attempts as possible.
+
+### Game Rules
+- You have 6 total guesses.
+- After each guess, the game displays feedback:
+  - 'c' means correct letter in correct position (green),
+  - 'p' means correct letter, wrong position (yellow),
+  - 'a' means letter not in the word (gray),
+  - 'u' means the result is unknown or the guess was invalid.
+
+### Tool Usage Strategy
+- Guess a word using `click_word`.
+- Call `read_game_board` to observe the outcome of the guess.
+- If the result of your last guess is `'uuuuu'`, it was invalid. You MUST call `clear_word` and try again.
+- If any row on the board has result `'ccccc'`, the game is won. You should stop.
+- ALWAYS interpret the full game board before making a guess. Think carefully about the number of rounds played and the results of previous guesses.
+
+### Available Tools
 {tool_registry_str}
+---
 
-You must decide which tool to use based on the current situation.
+### Output Format
 
-After each guess, you MUST:
-1. update the game state (using update_game_state)
-2. If the result is 'ccccc', you have won and must stop.
-
-If the result is 'uuuuu', this means the guess was not a valid word. You must clear the word and try again.
-
-You MUST output your response in this exact JSON format:
+Respond with JSON in the following format:
 {{
-  "reasoning": "text",
+  "reasoning": "Explain what you're doing and why.",
   "action": {{
     "tool": "tool_name",
     "args": {{ ... }}
   }}
 }}
 
-Examples of valid responses:
+Examples of valid JSON responses:
 {{
   "reasoning": "I need to make my first guess. CRANE is a good starting word.",
   "action": {{
@@ -230,21 +249,13 @@ Think carefully about the guess history before picking the next word to guess.
 """
 
     def get_llm_input(self, prev_action=None, prev_result=None) -> str:
-        prev_action_str = (
-            f"Previous action: {prev_action}\nResult: {prev_result}\n"
-            if prev_action and prev_result else ""
-        )
-        guess_history_str = self.format_guess_history(self.game_state.guess_history)
-        return f"""
-You are an autonomous agent playing Wordle.
-{prev_action_str}
-Current round: {self.game_state.current_round}/{self.game_state.max_guesses}
+        parts = []
 
-Guess history:
-{guess_history_str}
+        parts.append(f"Here a history of past actions and their results:\n{self.format_action_history(self.action_history)}")
 
-Pick the correct next action based on guess history and previous action. Think step by step about what you need to do next.
-""".strip()
+        parts.append("Decide what to do next. Think step by step.")
+
+        return "\n\n".join(parts)
 
     def call_llm(self, context: str) -> Optional[dict]:
         try:
@@ -273,7 +284,7 @@ Pick the correct next action based on guess history and previous action. Think s
         iteration = 0
         prev_action = None
         prev_result = None
-        while self.game_state.current_round <= self.game_state.max_guesses:
+        while iteration < max_iterations:
             iteration += 1
             if iteration > max_iterations:
                 logging.warning("Max iterations reached. Exiting.")
@@ -322,6 +333,7 @@ Pick the correct next action based on guess history and previous action. Think s
             result = self.execute_tool(tool_name, args)
             prev_action = (tool_name, args)
             prev_result = result
+            self.action_history.append((prev_action, prev_result))
 
             if "Error" in result:
                 logging.error(f"Error executing tool: {result}")
