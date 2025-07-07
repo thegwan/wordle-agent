@@ -45,7 +45,7 @@ def run_agent():
         page = browser.new_page()
         page.goto("https://www.nytimes.com/games/wordle/index.html", wait_until="domcontentloaded")
         setup_game(page)
-        agent = Level0WordleAgent(page)
+        agent = Level1WordleAgent(page)
         agent.run()
         input("Press Enter to exit...")
         browser.close()

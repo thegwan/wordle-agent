@@ -13,6 +13,10 @@ from playwright.sync_api import Page
 pp = pprint.PrettyPrinter(indent=4)
 
 class Level1WordleAgent:
+    """
+    Agent that plays Wordle using an LLM for play making and word selection.
+    The system executes tool calls and interacts with the browser, the LLM controls the decision making.
+    """
     def __init__(self, page: Page):
         """
         Initialize the Level1WordleAgent.
@@ -359,8 +363,6 @@ ALWAYS state out loud the number of remaining guesses before choosing a word to 
         """
         max_iterations = 50
         iteration = 0
-        prev_action = None
-        prev_result = None
         while iteration < max_iterations:
             iteration += 1
             if iteration > max_iterations:
@@ -385,9 +387,7 @@ ALWAYS state out loud the number of remaining guesses before choosing a word to 
             # Parse LLM response and execute tool
             tool_name, args = self.parse_action(json.dumps(llm_response))
             result = self.execute_tool(tool_name, args)
-            prev_action = (tool_name, args)
-            prev_result = result
-            self.action_history.append((prev_action, prev_result))
+            self.action_history.append(((tool_name, args), result))
 
             if "Error" in result:
                 logging.error(f"Error executing tool: {result}")
