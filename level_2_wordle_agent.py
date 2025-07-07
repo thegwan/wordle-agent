@@ -69,17 +69,15 @@ class Level2WordleAgent:
             }
         ]
 
-    def format_tool_registry(self, registry: List[dict]) -> str:
+    def format_tool_registry(self) -> str:
         """
         Format the tool registry for LLM input.
         
-        Args:
-            registry: List of tool definitions.
         Returns:
             str: Formatted string describing available tools.
         """
         lines = []
-        for tool in registry:
+        for tool in self.tool_registry:
             # Tool header
             lines.append(f"- {tool['name']}: {tool['description']}")
             # Args
@@ -96,33 +94,18 @@ class Level2WordleAgent:
 
         return "\n".join(lines).rstrip()
 
-    def format_action_history(self, action_history: List[Tuple[str, str]]) -> str:
+    def format_action_history(self) -> str:
         """
         Format the action history for LLM input.
         
-        Args:
-            action_history: List of (action, result) tuples.
         Returns:
             str: Formatted string of action history.
         """
         lines = []
-        for i, (action, result) in enumerate(action_history):
+        for i, (action, result) in enumerate(self.action_history):
             lines.append(f"Step {i+1}: {action} -> {result}")
         return "\n".join(lines).rstrip()
 
-    def format_guess_history(self, guess_history: List[Tuple[str, str]]) -> str:
-        """
-        Format the guess history for LLM input.
-        
-        Args:
-            guess_history: List of (guess, result) tuples.
-        Returns:
-            str: Formatted string of guess history.
-        """
-        lines = []
-        for i, (guess, result) in enumerate(guess_history):
-            lines.append(f"Round {i+1}: {guess} -> {result}")
-        return "\n".join(lines).rstrip()
 
     def parse_action(self, action_json: str) -> Tuple[str, dict]:
         """
@@ -181,7 +164,7 @@ class Level2WordleAgent:
         Returns:
             str: Instructions for the LLM.
         """
-        tool_registry_str = self.format_tool_registry(self.tool_registry)
+        tool_registry_str = self.format_tool_registry()
         return f"""
 You are an expert Wordle player.
 
@@ -249,7 +232,7 @@ Think step by step to successfully complete the Wordle game.
 You are an expert Wordle player currently playing a game of Wordle.
 
 Here is a history of past actions you have taken and their results:
-{self.format_action_history(self.action_history)}
+{self.format_action_history()}
 
 ALWAYS use your past actions and their results to decide what to do next.
 ALWAYS summarize the game board and reason about the results of the previous guesses before making the next guess.
@@ -365,9 +348,6 @@ ALWAYS state out loud the number of remaining guesses before choosing a word to 
         iteration = 0
         while iteration < max_iterations:
             iteration += 1
-            if iteration > max_iterations:
-                logging.warning("Max iterations reached. Exiting.")
-                break
 
             # Build LLM input
             llm_input = self.get_llm_input()
