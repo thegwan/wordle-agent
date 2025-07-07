@@ -1,7 +1,8 @@
 import logging
 import os
-import re
+import ast
 import json
+import pprint
 from typing import List, Tuple, Optional
 from openai import OpenAI
 from dataclasses import dataclass
@@ -10,100 +11,22 @@ from browser_utils import (
 )
 from playwright.sync_api import Page
 
-@dataclass
-class GameState:
-    guess_history: List[Tuple[str, str]]
-    current_round: int
-    max_guesses: int
-
-def click_word(page: Page, word: str) -> None:
-    for letter in word.lower():
-        selector = f'button[data-key="{letter}"]'
-        if not wait_and_click(
-            page, selector, description=f"Key '{letter}'"
-        ):
-            logging.error(f"Failed to click letter: {letter}")
-    wait_and_click(page, 'button[data-key="↵"]', description="Enter key")
-    page.wait_for_timeout(1000)
-
-def clear_word(page: Page) -> None:
-    for i in range(5):
-        wait_and_click(
-            page, 'button[data-key="←"]', description=f"Backspace {i+1}"
-        )
-
-def read_game_board(page: Page) -> List[Tuple[str, str]]:
-    page.wait_for_timeout(1000)
-    tiles = page.locator('div[class*="Tile-module_tile"]').all()
-    board = []
-    for i in range(0, len(tiles), 5):
-        row_tiles = tiles[i:i+5]
-        word = ''
-        result = ''
-        for tile in row_tiles:
-            letter = (tile.text_content() or '').strip().lower()
-            data_state = tile.get_attribute('data-state') or ''
-            word += letter if letter else ''
-            if data_state == 'correct':
-                result += 'c'
-            elif data_state == 'present':
-                result += 'p'
-            elif data_state == 'absent':
-                result += 'a'
-            else:
-                result += 'u'
-        if len(word) == 5:
-            board.append((word, result))
-    return board
-
-def read_game_state(page: Page, row_index: int = 0) -> str:
-    page.wait_for_timeout(1000)
-    tiles = page.locator('div[class*="Tile-module_tile"]').all()
-    start_index = row_index * 5
-    end_index = start_index + 5
-    if len(tiles) < end_index:
-        logging.error(
-            f"Not enough tiles found. Expected at least {end_index}, "
-            f"got {len(tiles)}"
-        )
-        return "uuuuu"
-    row_tiles = tiles[start_index:end_index]
-    result = ""
-    for i, tile in enumerate(row_tiles):
-        data_state = tile.get_attribute('data-state') or ''
-        if data_state == 'correct':
-            result += 'c'
-        elif data_state == 'present':
-            result += 'p'
-        elif data_state == 'absent':
-            result += 'a'
-        else:
-            result += 'u'
-    return result
-
-def update_game_state(
-    page: Page, game_state: GameState, guess: str
-) -> str:
-    # row index is 0-indexed, but current_round is 1-indexed
-    result = read_game_state(page, game_state.current_round - 1)
-    if 'u' not in result:
-        game_state.guess_history.append((guess, result))
-        game_state.current_round += 1
-    return result
-
+pp = pprint.PrettyPrinter(indent=4)
 
 class Level1WordleAgent:
     def __init__(self, page: Page):
+        """
+        Initialize the Level1WordleAgent.
+        
+        Args:
+            page: Page object representing the Wordle game.
+        """
         self.page = page
         self.llm_client = OpenAI(
             api_key=os.getenv('OPENAI_API_KEY')
         )
+        self.game_status = None
         self.action_history = []
-        self.game_state = GameState(
-            guess_history=[],
-            current_round=1,
-            max_guesses=6,
-        )
         self.tool_registry = [
             {
                 "name": "click_word",
@@ -129,10 +52,29 @@ class Level1WordleAgent:
                 "description": "Read the current game board. This returns all guessed words and their result strings (e.g., 'cpaaa').",
                 "args": {},
                 "returns": "A list of tuples, each containing a 5-letter word and a 5-character string representing the result",
+            },
+            {
+                "name": "end_game",
+                "description": "End the game with a status of 'win' or 'loss'.",
+                "args": {
+                    "status": {
+                        "type": "str",
+                        "description": "The status of the game ('win' or 'loss').",
+                    },
+                },
+                "returns": "None",
             }
         ]
 
     def format_tool_registry(self, registry: List[dict]) -> str:
+        """
+        Format the tool registry for LLM input.
+        
+        Args:
+            registry: List of tool definitions.
+        Returns:
+            str: Formatted string describing available tools.
+        """
         lines = []
         for tool in registry:
             # Tool header
@@ -152,18 +94,44 @@ class Level1WordleAgent:
         return "\n".join(lines).rstrip()
 
     def format_action_history(self, action_history: List[Tuple[str, str]]) -> str:
+        """
+        Format the action history for LLM input.
+        
+        Args:
+            action_history: List of (action, result) tuples.
+        Returns:
+            str: Formatted string of action history.
+        """
         lines = []
         for i, (action, result) in enumerate(action_history):
             lines.append(f"Step {i+1}: {action} -> {result}")
         return "\n".join(lines).rstrip()
 
     def format_guess_history(self, guess_history: List[Tuple[str, str]]) -> str:
+        """
+        Format the guess history for LLM input.
+        
+        Args:
+            guess_history: List of (guess, result) tuples.
+        Returns:
+            str: Formatted string of guess history.
+        """
         lines = []
         for i, (guess, result) in enumerate(guess_history):
             lines.append(f"Round {i+1}: {guess} -> {result}")
         return "\n".join(lines).rstrip()
 
     def parse_action(self, action_json: str) -> Tuple[str, dict]:
+        """
+        Parse the action JSON string from the LLM into a tool name and arguments.
+        
+        Args:
+            action_json: JSON string specifying the action.
+        Returns:
+            Tuple[str, dict]: Tool name and arguments dictionary.
+        Raises:
+            ValueError: If the JSON is invalid or missing required fields.
+        """
         try:
             action_obj = json.loads(action_json)
             tool_name = action_obj["action"]["tool"]
@@ -175,26 +143,44 @@ class Level1WordleAgent:
             )
 
     def execute_tool(self, tool_name: str, args: dict) -> str:
+        """
+        Have the system execute the specified tool with given arguments.
+        
+        Args:
+            tool_name: Name of the tool to execute.
+            args: Arguments for the tool.
+        Returns:
+            str: Result message from the tool execution.
+        """
         logging.info(f"Executing tool: {tool_name} with args: {args}")
         try:
             if tool_name == 'click_word':
-                click_word(self.page, args['word'])
+                self.click_word(args['word'])
                 return f"Word clicked! Your most recent guess is {args['word']}"
             elif tool_name == 'clear_word':
-                clear_word(self.page)
+                self.clear_word()
                 return f"You have just cleared your most recent guess."
             elif tool_name == 'read_game_board':
-                result = read_game_board(self.page)
+                result = self.read_game_board()
                 return f"Game board read! Result: {result}"
+            elif tool_name == 'end_game':
+                self.end_game(args['status'])
+                return f"Game ended with status: {args['status']}"
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
         except Exception as e:
             return f"Error executing tool {tool_name}: {e}"
 
     def get_llm_instructions(self) -> str:
+        """
+        Generate the system instruction prompt for the LLM, including game rules and tool usage.
+        
+        Returns:
+            str: Instructions for the LLM.
+        """
         tool_registry_str = self.format_tool_registry(self.tool_registry)
         return f"""
-You are an autonomous agent playing Wordle.
+You are an expert Wordle player.
 
 Your goal is to guess the hidden 5-letter word in as few attempts as possible.
 
@@ -207,11 +193,12 @@ Your goal is to guess the hidden 5-letter word in as few attempts as possible.
   - 'u' means the result is unknown or the guess was invalid.
 
 ### Tool Usage Strategy
-- Guess a word using `click_word`.
+- Guess a word using `self.`.
 - Call `read_game_board` to observe the outcome of the guess.
-- If the result of your last guess is `'uuuuu'`, it was invalid. You MUST call `clear_word` and try again.
-- If any row on the board has result `'ccccc'`, the game is won. You should stop.
-- ALWAYS interpret the full game board before making a guess. Think carefully about the number of rounds played and the results of previous guesses.
+- If the result of your last guess is `'uuuuu'`, it was invalid. You MUST ALWAYScall `clear_word` and try again.
+- If any row on the board has result `'ccccc'`, the game is won. You should stop by calling `end_game` with status `'win'`.
+- At every step, determine how many guesses you have left. If you have used all 6 guesses and none of them were correct, the game is lost. You should stop by calling `end_game` with status `'loss'`.
+- Before making a guess, summarize the game board and the results of the previous guesses. Then, think carefully about what the next guess should be.
 
 ### Available Tools
 {tool_registry_str}
@@ -245,19 +232,36 @@ Examples of valid JSON responses:
   }}
 }}
 
-Think carefully about the guess history before picking the next word to guess.
+Think step by step to successfully complete the Wordle game.
 """
 
-    def get_llm_input(self, prev_action=None, prev_result=None) -> str:
-        parts = []
+    def get_llm_input(self) -> str:
+        """
+        Generate the input context for the LLM.
+        
+        Returns:
+            str: Input context for the LLM.
+        """
+        return f"""
+You are an expert Wordle player currently playing a game of Wordle.
 
-        parts.append(f"Here a history of past actions and their results:\n{self.format_action_history(self.action_history)}")
+Here is a history of past actions you have taken and their results:
+{self.format_action_history(self.action_history)}
 
-        parts.append("Decide what to do next. Think step by step.")
-
-        return "\n\n".join(parts)
+ALWAYS use your past actions and their results to decide what to do next.
+ALWAYS summarize the game board and reason about the results of the previous guesses before making the next guess.
+ALWAYS state out loud the number of remaining guesses before choosing a word to guess. End the game if you have won or used up all 6 guesses.
+"""
 
     def call_llm(self, context: str) -> Optional[dict]:
+        """
+        Call the LLM with the provided context and parse the response.
+        
+        Args:
+            context: The input context for the LLM.
+        Returns:
+            Optional[dict]: Parsed LLM response as a dictionary, or None on error.
+        """
         try:
             response = self.llm_client.responses.create(
                 model="gpt-4.1-mini",
@@ -279,7 +283,81 @@ Think carefully about the guess history before picking the next word to guess.
             print(f"Error calling LLM: {e}")
             return None
 
+    # tools
+    def click_word(self, word: str) -> None:
+        """
+        Click the on-screen keyboard to enter a 5-letter word and submit it.
+        
+        Args:
+            word: The 5-letter word to guess.
+        """
+        for letter in word.lower():
+            selector = f'button[data-key="{letter}"]'
+            if not wait_and_click(
+                self.page, selector, description=f"Key '{letter}'"
+            ):
+                logging.error(f"Failed to click letter: {letter}")
+        wait_and_click(self.page, 'button[data-key="↵"]', description="Enter key")
+        self.page.wait_for_timeout(1000)
+
+    def clear_word(self) -> None:
+        """
+        Clear the currently entered word by clicking backspace 5 times.
+        """
+        for i in range(5):
+            wait_and_click(
+                self.page, 'button[data-key="←"]', description=f"Backspace {i+1}"
+            )
+
+    def read_game_board(self) -> List[Tuple[str, str]]:
+        """
+        Read the current game board and return all guessed words and their result strings.
+        
+        Returns:
+            List[Tuple[str, str]]: List of (word, result) tuples for each guess.
+        """
+        self.page.wait_for_timeout(1000)
+        tiles = self.page.locator('div[class*="Tile-module_tile"]').all()
+        board = []
+        for i in range(0, len(tiles), 5):
+            row_tiles = tiles[i:i+5]
+            word = ''
+            result = ''
+            for tile in row_tiles:
+                letter = (tile.text_content() or '').strip().lower()
+                data_state = tile.get_attribute('data-state') or ''
+                word += letter if letter else ''
+                if data_state == 'correct':
+                    result += 'c'
+                elif data_state == 'present':
+                    result += 'p'
+                elif data_state == 'absent':
+                    result += 'a'
+                else:
+                    result += 'u'
+            if len(word) == 5:
+                board.append((word, result))
+        return board
+
+    def end_game(self, status: str) -> None:
+        """
+        Set the game status to 'win' or 'loss'.
+        
+        Args:
+            status: The status of the game ('win' or 'loss').
+        """
+        if status == "win":
+            self.game_status = "win"
+        elif status == "loss":
+            self.game_status = "loss"
+        else:
+            logging.error(f"Invalid game status: {status}")
+
     def run(self):
+        """
+        Main loop to play the Wordle game using the LLM for decision making.
+        Continues until the game is won, lost, or an error occurs.
+        """
         max_iterations = 50
         iteration = 0
         prev_action = None
@@ -290,43 +368,20 @@ Think carefully about the guess history before picking the next word to guess.
                 logging.warning("Max iterations reached. Exiting.")
                 break
 
-            # Determine stopping conditions
-            guess_history = self.game_state.guess_history
-            last_result = guess_history[-1][1] if guess_history else None
-            game_won = last_result == 'ccccc'
-            game_lost = (
-                self.game_state.current_round > self.game_state.max_guesses
-                and not game_won
-            )
-
-            if game_won:
-                logging.info(
-                    f"Game won in {self.game_state.current_round} guesses!"
-                )
-                break
-
-            if game_lost:
-                logging.info(
-                    f"Game lost after {self.game_state.current_round - 1} guesses."
-                )
-                break
-
             # Build LLM input
-            llm_input = self.get_llm_input(
-                prev_action=prev_action, prev_result=prev_result
-            )
-            logging.info("\n--- LLM INPUT ------\n")
-            logging.info(llm_input)
-            logging.info("\n--------------------\n")
+            llm_input = self.get_llm_input()
+            logging.info("\n--- BEGIN LLM INPUT ------\n")
+            print(llm_input)
+            logging.info("\n--- END LLM INPUT --------\n")
 
             # Call LLM and get the response
             llm_response = self.call_llm(llm_input)
             if not llm_response:
                 logging.error("Failed to get LLM response.")
                 break
-            logging.info("\n--- LLM RESPONSE ---\n")
-            logging.info(llm_response)
-            logging.info("\n--------------------\n")
+            logging.info("\n--- BEGIN LLM RESPONSE ---\n")
+            pp.pprint(llm_response)
+            logging.info("\n--- END LLM RESPONSE  ----\n")
 
             # Parse LLM response and execute tool
             tool_name, args = self.parse_action(json.dumps(llm_response))
@@ -338,3 +393,9 @@ Think carefully about the guess history before picking the next word to guess.
             if "Error" in result:
                 logging.error(f"Error executing tool: {result}")
                 break
+
+            if self.game_status is not None:
+                break
+        logging.info(f"Game ended with status: {self.game_status}")
+
+            
