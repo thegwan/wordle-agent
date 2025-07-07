@@ -1,16 +1,13 @@
 import logging
-import os
-import re
 from typing import List, Tuple, Optional
 
-from dataclasses import dataclass
 from dotenv import load_dotenv
-from openai import OpenAI
 from playwright.sync_api import sync_playwright, Page
 
 from browser_utils import wait_for_selector_safe, remove_ad_container, wait_and_click
-from level_0_wordle_agent import Level0WordleAgent
+
 from level_1_wordle_agent import Level1WordleAgent
+from level_2_wordle_agent import Level2WordleAgent
 
 load_dotenv()
 
