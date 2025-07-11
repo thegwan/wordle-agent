@@ -5,6 +5,8 @@ A Wordle-playing AI that combines browser automation (via Playwright) with LLM-b
 - **Wordle Workflow:** The LLM only guesses the next word. The system (plain old Python code) controls the game loop, handles invalid guesses, and manages all browser interactions. This is a classic "AI workflow" where the LLM has no agency over the control flow.
 - **Wordle Agent:** The LLM is given a set of tools (guess word, clear word, read board, end game) and decides which tool to use at each step. The LLM receives the full action/result history and can reason about when to guess, clear, read, or end the game. This mode gives the LLM more autonomy, but is more brittle and less reliable than the workflow.
 
+⚠️ This is a prototype meant for experimentation. It has no automated tests or evals and will definitely break if the Wordle site changes. 
+
 
 ## Quick Start
 This demo uses the OpenAI Responses API with gpt-4.1-mini. Feel free to swap it out with your favorite model.
@@ -53,5 +55,5 @@ from wordle_agent import WordleAgent
 agent = WordleAgent(page)       # More agentic
 ```
 
-⚠️ This is a prototype meant for experimentation. It has no automated tests or evals and will definitely break if the Wordle site changes. 
+
 
