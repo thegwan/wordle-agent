@@ -4,7 +4,6 @@ import json
 import pprint
 from typing import List, Tuple, Optional
 from openai import OpenAI
-from dataclasses import dataclass
 from browser_utils import (
     wait_and_click,
 )
@@ -12,14 +11,14 @@ from playwright.sync_api import Page
 
 pp = pprint.PrettyPrinter(indent=4)
 
-class Level2WordleAgent:
+class WordleAgent:
     """
     Agent that plays Wordle using an LLM for play making and word selection.
     The system executes tool calls and interacts with the browser, the LLM controls the decision making.
     """
     def __init__(self, page: Page):
         """
-        Initialize the Level2WordleAgent.
+        Initialize the WordleAgent.
         
         Args:
             page: Page object representing the Wordle game.
@@ -179,9 +178,9 @@ Your goal is to guess the hidden 5-letter word in as few attempts as possible.
   - 'u' means the result is unknown or the guess was invalid.
 
 ### Tool Usage Strategy
-- Guess a word using `self.`.
-- Call `read_game_board` to observe the outcome of the guess.
-- If the result of your last guess is `'uuuuu'`, it was invalid. You MUST ALWAYScall `clear_word` and try again.
+- Guess a word using `click_word`.
+- After guessing a word, call `read_game_board` to observe the outcome of the guess.
+- If the result of your last guess is `'uuuuu'`, it was invalid. You MUST ALWAYS call `clear_word` and try again.
 - If any row on the board has result `'ccccc'`, the game is won. You should stop by calling `end_game` with status `'win'`.
 - At every step, determine how many guesses you have left. If you have used all 6 guesses and none of them were correct, the game is lost. You should stop by calling `end_game` with status `'loss'`.
 - Before making a guess, summarize the game board and the results of the previous guesses. Then, think carefully about what the next guess should be.

@@ -6,14 +6,14 @@ from browser_utils import  wait_and_click
 from playwright.sync_api import Page
 
 
-class Level1WordleAgent:
+class WordleWorkflow:
     """
     Agent that plays Wordle using an LLM to select guesses. 
     The system controls the play, while the LLM only makes next word guesses.
     """
     def __init__(self, page: Page):
         """
-        Initialize the Level1WordleAgent.
+        Initialize the WordleWorkflow.
 
         Args:
             page: Playwright Page object representing the Wordle game.

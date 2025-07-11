@@ -6,8 +6,8 @@ from playwright.sync_api import sync_playwright, Page
 
 from browser_utils import wait_for_selector_safe, remove_ad_container, wait_and_click
 
-from level_1_wordle_agent import Level1WordleAgent
-from level_2_wordle_agent import Level2WordleAgent
+from wordle_workflow import WordleWorkflow
+from wordle_agent import WordleAgent
 
 load_dotenv()
 
@@ -42,7 +42,7 @@ def run_agent():
         page = browser.new_page()
         page.goto("https://www.nytimes.com/games/wordle/index.html", wait_until="domcontentloaded")
         setup_game(page)
-        agent = Level2WordleAgent(page)
+        agent = WordleAgent(page)
         agent.run()
         input("Press Enter to exit...")
         browser.close()
