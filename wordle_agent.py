@@ -234,8 +234,8 @@ Here is a history of past actions you have taken and their results:
 {self.format_action_history()}
 
 ALWAYS use your past actions and their results to decide what to do next.
-ALWAYS summarize the game board and reason about the results of the previous guesses before making the next guess.
 ALWAYS state out loud the number of remaining guesses before choosing a word to guess. End the game if you have won or used up all 6 guesses.
+ALWAYS state out loud a summary of the current game board before choosing a word to guess.
 """
 
     def call_llm(self, context: str) -> Optional[dict]:
